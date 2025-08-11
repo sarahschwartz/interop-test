@@ -1,3 +1,4 @@
+import { parseEther } from "ethers";
 import { ethers } from "hardhat";
 import { types, utils } from "zksync-ethers";
 
@@ -20,24 +21,30 @@ async function main() {
 
   // wait for batch
   console.log("looking for batch number and transaction index...");
-  const { batchNumber, txIndex } = await getBatchNumber(hash);
-  if(!batchNumber || txIndex === null || txIndex === undefined) {
+  const { batchNumber: l1BatchNumber, txIndex: txNumberInBlock } = await getBatchNumber(hash);
+  if(!l1BatchNumber || txNumberInBlock === null || txNumberInBlock === undefined) {
     throw new Error("Failed to get batch number or transaction index");
   }
-  console.log('got batch number:', batchNumber, 'and transaction index:', txIndex);
-  await waitForBatchToBeReady(batchNumber);
+  if (txNumberInBlock > 0xffff) throw new Error("tx index exceeds uint16");
+  console.log('got l1 batch number:', l1BatchNumber, 'and transaction index in block:', txNumberInBlock);
+  await waitForBatchToBeReady(l1BatchNumber);
   console.log("Batch is ready, retrieving proof...");
 
-  const proof = await getProof(hash);
+  const { proof, l2MessageIndex } = await getProof(hash);
   console.log("Proof retrieved successfully:", proof);
+  console.log("L2 Message Index:", l2MessageIndex);
 
-  await waitForInteropRootNonZero(signer, batchNumber);
+  const gwBlockNumber = getGWBlockNumber(proof);
+  console.log("Gateway Block Number:", gwBlockNumber);
+
+  await waitForInteropRootNonZero(signer, gwBlockNumber);
   console.log("Interop root is non-zero, proceeding to verification...");
 
   const value = await getVerificationResponse(
     signer,
-    batchNumber,
-    txIndex,
+    l1BatchNumber,
+    l2MessageIndex!,
+    txNumberInBlock,
     proof
   );
   console.log("Value returned from the verifier:", value);
@@ -65,9 +72,9 @@ async function getBatchDetails(batchNumber: number) {
 async function sendPayloadToL1Messenger(signer: any) {
   const L1Messenger = await ethers.getContractAt(
     "IL1Messenger",
-    L1_MESSENGER_CONTRACT_ADDRESS
+    L1_MESSENGER_CONTRACT_ADDRESS,
+    signer
   );
-  L1Messenger.connect(signer);
 
   const response = await L1Messenger.sendToL1(payload);
   const tx = await response.wait();
@@ -83,13 +90,11 @@ async function getBatchNumber(hash: string) {
   const txReceipt = (await ethers.provider.getTransactionReceipt(
     hash
   )) as types.TransactionReceipt;
-  console.log('tx receipt: ', txReceipt);
 
   if (txReceipt && txReceipt.l1BatchNumber) {
     console.log('found batch number')
-    console.log('tx receipt: ', txReceipt)
     batchNumber = txReceipt.l1BatchNumber;
-    txIndex = txReceipt.l1BatchTxIndex;
+    txIndex = txReceipt.l2ToL1Logs[0].transactionIndex;
     foundInfo = true;
   } else {
     console.log("Batch number not found yet, retrying...");
@@ -104,7 +109,6 @@ async function waitForBatchToBeReady(batchNumber: number) {
   let isBatchExecuted = false;
   while (!isBatchExecuted) {
     batchDetails = await getBatchDetails(batchNumber);
-    console.log("Batch details:", batchDetails);
     if (batchDetails.executeTxHash) {
       isBatchExecuted = true;
       console.log("Batch executed");
@@ -118,26 +122,36 @@ async function waitForBatchToBeReady(batchNumber: number) {
 async function getProof(hash: string) {
   let proofResponse;
   let proof;
+  let l2MessageIndex;
   let gotProofInfo = false;
   while (!gotProofInfo) {
     proofResponse = await getL2ToL1LogProof(hash);
-    console.log("Proof response:", proofResponse);
-    if (proofResponse && proofResponse.proof) {
-      gotProofInfo = true;
+    const index = proofResponse ? Number(proofResponse.id ?? proofResponse.l2MessageIndex) : undefined;
+    if (proofResponse && proofResponse.proof && index !== undefined) {
       proof = proofResponse.proof;
+      l2MessageIndex = index;
+      gotProofInfo = true;
     } else {
       console.log("Proof not found yet, retrying...");
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
   console.log("Proof retrieved successfully");
-  return proof;
+  return { proof, l2MessageIndex };
+}
+
+function getGWBlockNumber(proof: string[]): number {
+  const a = 1 + parseInt(proof[0].slice(4, 6), 16);
+  const b = 1 + parseInt(proof[0].slice(6, 8), 16);
+  const gwProofIndex = a + b;
+  return parseInt(proof[gwProofIndex].slice(2, 34), 16);
 }
 
 async function getVerificationResponse(
   signer: any,
-  batchNumber: number,
-  txIndex: number,
+  l1BatchNumber: number,
+  l2MessageIndex: number,
+  txIndexInBlock: number,
   proof: string[]
 ) {
   const l2MessageVerificationAbi = [
@@ -151,20 +165,19 @@ async function getVerificationResponse(
   );
 
   const chainID = (await ethers.provider.getNetwork()).chainId;
-  const interopSender = signer.address;
 
-  const verifierResponse =
+  const included =
     await l2MessageVerificationContract.proveL2MessageInclusionShared(
       chainID,
-      batchNumber,
-      txIndex,
-      [txIndex, interopSender, payload],
+      l1BatchNumber,
+      l2MessageIndex,
+      [txIndexInBlock, signer.address, payload],
       proof
     );
-  return verifierResponse.value;
+  return included;
 }
 
-async function waitForInteropRootNonZero(signer: any, l1BatchNumber: number) {
+async function waitForInteropRootNonZero(signer: any, gwBlockNumber: number) {
   const GATEWAY_CHAIN_ID = 505;
   const L2_INTEROP_ROOT_STORAGE_ADDRESS =
     "0x0000000000000000000000000000000000010008";
@@ -174,24 +187,23 @@ async function waitForInteropRootNonZero(signer: any, l1BatchNumber: number) {
   ];
   const l2InteropRootStorage = await ethers.getContractAt(
     l2InteropRootStorageAbi,
-    L2_INTEROP_ROOT_STORAGE_ADDRESS
+    L2_INTEROP_ROOT_STORAGE_ADDRESS,
+    signer
   );
-  l2InteropRootStorage.connect(signer);
   let currentRoot = ethers.ZeroHash;
 
   while (currentRoot === ethers.ZeroHash) {
     console.log('interop root is 0....')
     // We make repeated transactions to force the L2 to update the interop root.
-    const tx = await signer.transfer({
+      const tx = await signer.sendTransaction({
       to: signer.address,
-      amount: 1,
+      value: parseEther("0.1"),
     });
     await tx.wait();
-    await sendPayloadToL1Messenger(signer);
 
     currentRoot = await l2InteropRootStorage.interopRoots(
       GATEWAY_CHAIN_ID,
-      l1BatchNumber
+      gwBlockNumber
     );
     await utils.sleep(signer.provider.pollingInterval);
   }
