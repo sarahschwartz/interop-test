@@ -166,7 +166,7 @@ async function getVerificationResponse(
 
   const chainID = (await ethers.provider.getNetwork()).chainId;
 
-  const included =
+  const response =
     await l2MessageVerificationContract.proveL2MessageInclusionShared(
       chainID,
       l1BatchNumber,
@@ -174,7 +174,7 @@ async function getVerificationResponse(
       [txIndexInBlock, signer.address, payload],
       proof
     );
-  return included;
+  return response.value;
 }
 
 async function waitForInteropRootNonZero(signer: any, gwBlockNumber: number) {
