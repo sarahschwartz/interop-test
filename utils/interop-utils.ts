@@ -4,18 +4,6 @@ import { types, Provider, Wallet, Contract, utils } from "zksync-ethers";
 export const L1_MESSENGER_CONTRACT_ADDRESS =
   "0x0000000000000000000000000000000000008008";
 
-export function getGWBlockNumber(
-  params: types.FinalizeWithdrawalParams
-): number {
-  /// see hashProof in MessageHashing.sol for this logic.
-  let gwProofIndex =
-    1 +
-    parseInt(params.proof[0].slice(4, 6), 16) +
-    1 +
-    parseInt(params.proof[0].slice(6, 8), 16);
-  return parseInt(params.proof[gwProofIndex].slice(2, 34), 16);
-}
-
 export async function waitUntilBlockFinalized(wallet: Wallet, blockNumber: number) {
     // console.log('Waiting for block to be finalized...', blockNumber);
     while (true) {
@@ -38,7 +26,6 @@ export async function waitForL2ToL1LogProof(wallet: Wallet, blockNumber: number,
         await utils.sleep(wallet.provider.pollingInterval);
     }
 }
-
 
 export async function waitForInteropRootNonZero(
   provider: Provider,

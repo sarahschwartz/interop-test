@@ -2,8 +2,6 @@ import { ethers } from "hardhat";
 import { Provider, types, Wallet } from "zksync-ethers";
 import { L1_MESSENGER_CONTRACT_ADDRESS, waitForL2ToL1LogProof } from "../utils/interop-utils";
 
-
-
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
 
 async function main() {
