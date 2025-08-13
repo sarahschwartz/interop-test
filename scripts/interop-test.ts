@@ -1,7 +1,7 @@
 import { ethers } from "hardhat";
-import { Provider, types, Wallet } from "zksync-ethers";
-import { L1_MESSENGER_CONTRACT_ADDRESS, waitForL2ToL1LogProof } from "../utils/interop-utils";
-
+import { Contract, Provider, types, utils, Wallet } from "zksync-ethers";
+import { getGWBlockNumber, waitForInteropRootNonZero, waitForL2ToL1LogProof } from "../utils/interop-utils";
+import * as L2_MESSAGE_V_JSON from "../utils/L2MessageVerification.json"
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
 
 async function main() {
@@ -14,15 +14,12 @@ async function main() {
   console.log("Using signer:", wallet.address);
   const balance = await ethers.provider.getBalance(wallet.address);
   console.log("Signer balance:", ethers.formatEther(balance));
-  const L1Messenger = await ethers.getContractAt(
-    "IL1Messenger",
-    L1_MESSENGER_CONTRACT_ADDRESS,
-    wallet
-  );
+  const L1Messenger = new Contract(utils.L1_MESSENGER_ADDRESS, utils.L1_MESSENGER, wallet);
 
   // Send message to L1 and wait until it gets there.
   const message = ethers.toUtf8Bytes("Some L2->L1 message");
   const tx = await L1Messenger.sendToL1(message);
+  console.log('waiting for receipt...')
   const receipt = await (
     await wallet.provider.getTransaction(tx.hash)
   ).waitFinalize();
@@ -30,12 +27,15 @@ async function main() {
 
   // Get the proof for the sent message from the server, expect it to exist.
   const l2ToL1LogIndex = receipt.l2ToL1Logs.findIndex(
-    (log: types.L2ToL1Log) => log.sender == L1_MESSENGER_CONTRACT_ADDRESS
+    (log: types.L2ToL1Log) => log.sender == utils.L1_MESSENGER_ADDRESS
   );
   console.log("l2ToL1LogIndex", l2ToL1LogIndex);
   await waitForL2ToL1LogProof(wallet, receipt.blockNumber, tx.hash);
+
+  const params = await wallet.finalizeWithdrawalParams(tx.hash);
+  console.log("params:", params)
+  
   const msgProof = await wallet.provider.getLogProof(tx.hash, l2ToL1LogIndex);
-  console.log("msg proof", msgProof);
 
   const { id, proof } = msgProof!;
 
@@ -52,7 +52,31 @@ async function main() {
     proof
   );
 
-  console.log("result:", result);
+  console.log("included on l1:", result);
+
+  // Needed else the L2's view of GW's MessageRoot won't be updated
+  await waitForInteropRootNonZero(wallet.provider, wallet, getGWBlockNumber(params));
+  console.log('interop root is non zero')
+
+  const L2_MESSAGE_VERIFICATION_ADDRESS = '0x0000000000000000000000000000000000010009';
+  
+  const l2MessageVerificationAbi = L2_MESSAGE_V_JSON.abi;
+   const l2MessageVerification = new Contract(
+            L2_MESSAGE_VERIFICATION_ADDRESS,
+            l2MessageVerificationAbi,
+            wallet
+        );
+
+console.log("requesting...")
+
+  const included = await l2MessageVerification.proveL2MessageInclusionShared(
+    (await wallet.provider.getNetwork()).chainId,
+    params.l1BatchNumber,
+    params.l2MessageIndex,
+    { txNumberInBatch: params.l2TxNumberInBlock, sender: params.sender, data: params.message },
+    params.proof
+);
+  console.log("l2 proved:", included)
 }
 
 main()
