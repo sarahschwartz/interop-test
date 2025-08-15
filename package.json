@@ -24,12 +24,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "deploy": "hardhat run ./scripts/deploy.ts",
-    "deploy-erc20": "hardhat run ./scripts/deploy-erc20.ts",
-    "deploy-nft": "hardhat run ./scripts/deploy-nft.ts",
-    "interact": "hardhat run ./scripts/interact.ts",
     "interop": "hardhat run ./scripts/interop-test.ts",
-    "interop:ethers": "hardhat run ./scripts/interop-ethers.ts",
     "compile": "hardhat compile",
     "clean": "hardhat clean",
     "test": "hardhat test --network hardhat"
