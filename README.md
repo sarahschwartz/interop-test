@@ -88,6 +88,12 @@ zkstack chain init \
     --update-submodules false
 ```
 
+### Setup the transaction filterer for gateway
+
+```bash
+zkstack chain gateway create-tx-filterer --chain gateway --ignore-prerequisites
+```
+
 ### Convert gateway chain to gateway mode
 
 ```bash
