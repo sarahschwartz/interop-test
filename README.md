@@ -20,17 +20,19 @@ foundryup-zksync -C 27360d4c8
 
 ### Create a new ecosystem
 
-You can select the default prompt options.
-In these instructions we will assume the chain name is `era`, but you can name your chain anything - just make sure to update the commands later on.
+In these instructions we will assume the chain name is `zk_chain_1`, but you can name your chain anything - just make sure to update the commands later on.
+Select `yes` to enable the EVM emulator.
+You can select the default prompt options for all other options.
 Before starting the containers, make sure Docker is already running.
 
 ```bash
 zkstack ecosystem create
 ```
 
-### Initialize the Ecosystem and Era
+### Initialize the Ecosystem and Chain
 
 ```bash
+cd <YOUR ECOSYSTEM>
 zkstack ecosystem init --dev
 ```
 
@@ -39,7 +41,7 @@ zkstack ecosystem init --dev
 ```bash
 zkstack chain create \
     --chain-name zk_chain_2 \
-    --chain-id 260 \
+    --chain-id 5394 \
     --prover-mode no-proofs \
     --wallet-creation localhost \
     --l1-batch-commit-data-generator-mode rollup \
@@ -55,11 +57,11 @@ zkstack chain create \
 zkstack chain init \
     --deploy-paymaster \
     --l1-rpc-url=http://localhost:8545 \
-    --server-db-url=postgres://postgres:notsecurepassword@localhost:5432 \
-    --server-db-name=zksync_server_localhost_dut \
     --chain zk_chain_2 \
     --update-submodules false
 ```
+
+You can select the default options for the remaining prompts.
 
 ### Create & Init Gateway Chain
 
@@ -111,7 +113,7 @@ zkstack server --ignore-prerequisites --chain gateway
 Open a new terminal in the ecosystem folder so the gateway server keeps running, and run the commands below to migrate the other chains to use gateway:
 
 ```bash
-zkstack chain gateway migrate-to-gateway --chain era --gateway-chain-name gateway
+zkstack chain gateway migrate-to-gateway --chain zk_chain_1 --gateway-chain-name gateway
 ```
 
 ```bash
@@ -120,10 +122,10 @@ zkstack chain gateway migrate-to-gateway --chain zk_chain_2 --gateway-chain-name
 
 ### Start the Other Chain Servers
 
-Start the era server:
+Start the first chain's server:
 
 ```bash
-zkstack server --ignore-prerequisites --chain era
+zkstack server --ignore-prerequisites --chain zk_chain_1
 ```
 
 Open a new terminal in the ecosystem folder and start the second chain's server:
@@ -134,23 +136,21 @@ zkstack server --ignore-prerequisites --chain zk_chain_2
 
 ### Bridge funds to each chain
 
-Use a pre-configured rich wallet to bridge some ETH to `era` and `zk_chain_2`.
-Double check the RPC endpoints for the chains inside `<YOUR_ECOSYSTEM_FOLDER>/zksync-era/chains/zk_chain_2/configs/general.yaml` and `<YOUR_ECOSYSTEM_FOLDER>/zksync-era/chains/era/configs/general.yaml` under `api.web3_json_rpc.http_url`.
-The commands below assumes the chains are running at ports `3050` and `3150`.
+Use a pre-configured rich wallet to bridge some ETH to `zk_chain_1` and `zk_chain_2`.
 Open a new terminal to run the commands.
 
 ```bash
-npx zksync-cli bridge deposit --rpc=http://localhost:3050 --l1-rpc=http://localhost:8545 --amount 20 --to 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --pk 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+zkstack dev rich-account --chain zk_chain_1
 ```
 
 ```bash
-npx zksync-cli bridge deposit --rpc=http://localhost:3150 --l1-rpc=http://localhost:8545 --amount 20 --to 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 --pk 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+zkstack dev rich-account --chain zk_chain_2
 ```
 
 ### Update the RPC Endpoints in the script
 
 In the `scripts/interop-test.ts` file, update the RPC endpoints to match those from the previous step.
-Make sure to also check the RPC endpoint for gateway in `<YOUR_ECOSYSTEM_FOLDER>/zksync-era/chains/gateway/configs/general.yaml`, and it's chain ID in `<YOUR_ECOSYSTEM_FOLDER>/zksync-era/chains/gateway/ZkStack.yaml`.
+Make sure to also check the RPC endpoint for gateway in `<YOUR_ECOSYSTEM_FOLDER>/zksync-era/chains/gateway/configs/general.yaml`.
 
 ### Install the local dependencies and run the test
 
@@ -162,10 +162,10 @@ npm run interop
 You should see an output like this:
 
 ```txt
-waiting for receipt...
-got tx receipt
-got l2ToL1LogIndex
-gw proof ready
-interop root is updated
-message is verified on chain 2: true
+Sent on source chain: { txHash: '0x...'}
+Status: QUEUED
+Status: PROVING
+Status: EXECUTED
+Interop root is updated: 0x...
+Message is verified: true
 ```

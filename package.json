@@ -18,7 +18,7 @@
     "mocha": "^11.2.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
-    "zksync-ethers": "^6.17.0"
+    "zksync-ethers": "^6.21.0"
   },
   "description": "A template for ZKsync smart contracts development with Hardhat",
   "license": "MIT",

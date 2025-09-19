@@ -1,83 +1,111 @@
 import { ethers } from "hardhat";
-import { Contract, Provider, utils, Wallet } from "zksync-ethers";
-import * as L2_MESSAGE_V_JSON from "../utils/L2MessageVerification.json";
-import { getGwBlockForBatch, waitForGatewayInteropRoot } from '../utils/interop-utils'
+import {
+  Contract,
+  InteropClient,
+  Provider,
+  utils,
+  Wallet,
+  getGwBlockForBatch,
+} from "zksync-ethers";
 
-const PRIVATE_KEY = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
+const PRIVATE_KEY =
+  "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
 
 // verify these endpoints in zksync-era/chains/<CHAIN>/configs/general.yaml
-const CHAIN1_RPC = "http://localhost:3050"; // era
+const CHAIN1_RPC = "http://localhost:3050"; // zk_chain_1
 const CHAIN2_RPC = "http://localhost:3150"; // zk_chain_2
-const GW_RPC     = "http://localhost:3250"; // gateway
-// verify this value in zksync-era/chains/gateway/ZkStack.yaml
+const GW_RPC = "http://localhost:3250"; // gateway
 const GW_CHAIN_ID = BigInt("506");
 
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
+
+// Chain 1
+const providerChain1 = new Provider(CHAIN1_RPC);
+const providerl1 = new Provider("http://localhost:8545");
+const walletChain1 = new Wallet(PRIVATE_KEY, providerChain1, providerl1);
+
+// Chain 2
+const providerChain2 = new Provider(CHAIN2_RPC);
+const walletChain2 = new Wallet(PRIVATE_KEY, providerChain2, providerl1);
+
+const interop = new InteropClient({
+  gateway: {
+    // 'testnet' | 'mainnet' | 'local'
+    env: "local",
+    gwRpcUrl: GW_RPC,
+    gwChainId: GW_CHAIN_ID,
+  },
+});
+
 async function main() {
-  if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
+  const message = "Some L2->L1 message";
+  const sent = await interop.sendMessage(walletChain1, message);
+  console.log("Sent on source chain:", sent);
 
-  // Chain 1
-  const providerChain1 = new Provider(CHAIN1_RPC);
-  const providerl1 = new Provider("http://localhost:8545");
-  const walletChain1 = new Wallet(PRIVATE_KEY, providerChain1, providerl1);
+  let status: any = "QUEUED";
+  while (status !== "EXECUTED") {
+    await utils.sleep(10000);
+    status = await checkStatus(sent.txHash, providerChain1);
+    console.log("Status:", status);
+  }
 
-  // Chain 2
-  const providerChain2 = new Provider(CHAIN2_RPC);
-  const walletChain2 = new Wallet(PRIVATE_KEY, providerChain2, providerl1);
+  // for local testing only
+  const root = await updateLocalChainInteropRoot(sent.txHash);
+  console.log("Interop root is updated:", root);
 
-  // ZKsync Gateway
+  const verifyRes = await interop.verifyMessage({
+    txHash: sent.txHash,
+    srcProvider: providerChain1, // source chain provider (to fetch proof + batch details)
+    targetChain: providerChain2, // target chain provider (to read interop root + verify)
+    // includeProofInputs: true, // optional debug info
+  });
+  console.log("Message is verified:", verifyRes.verified);
+}
+
+async function checkStatus(txHash: `0x${string}`, provider: Provider) {
+  const status = await interop.getMessageStatus(provider, txHash);
+  return status;
+}
+
+// force interop root to update on local chain 2
+async function updateLocalChainInteropRoot(
+  txHash: `0x${string}`,
+  timeoutMs = 120_000
+): Promise<string> {
+  const receipt = await (
+    await walletChain1.provider.getTransaction(txHash)
+  ).waitFinalize();
   const gw = new ethers.JsonRpcProvider(GW_RPC);
-
-  // Send message to L1 and wait until it gets there.
-  const message = ethers.toUtf8Bytes("Some L2->L1 message");
-  const L1Messenger = new Contract(utils.L1_MESSENGER_ADDRESS, utils.L1_MESSENGER, walletChain1);
-  const tx = await L1Messenger.sendToL1(message);
-  console.log("waiting for receipt...");
-  const receipt = await (await walletChain1.provider.getTransaction(tx.hash)).waitFinalize();
-  console.log("got tx receipt");
-  if(receipt.l1BatchNumber === null || receipt.l1BatchTxIndex === null) throw new Error("Could not find l1BatchNumber or l1BatchTxIndex in receipt");
-
-  // Find the exact interop log: sender=0x…8008, key=pad32(EOA), value=keccak(message)
-  const paddedEOA = ethers.zeroPadValue(walletChain1.address, 32);
-  const msgHash = ethers.keccak256(message);
-  const l2ToL1LogIndex = receipt.l2ToL1Logs.findIndex((log: any) =>
-    log.sender.toLowerCase() === utils.L1_MESSENGER_ADDRESS.toLowerCase() &&
-    log.key.toLowerCase()    === paddedEOA.toLowerCase() &&
-    log.value.toLowerCase()  === msgHash.toLowerCase()
+  const gwBlock = await getGwBlockForBatch(
+    BigInt(receipt.l1BatchNumber!),
+    providerChain1,
+    gw
   );
-  console.log("got l2ToL1LogIndex");
-  if (l2ToL1LogIndex < 0) throw new Error("Could not find our interop log in receipt.l2ToL1Logs");
 
-  // fetch the gw proof
-  const gwProofResp = await walletChain1.provider.send("zks_getL2ToL1LogProof", [
-    tx.hash,
-    l2ToL1LogIndex,
-    "proof_based_gw",
-  ]);
-  if (!gwProofResp?.proof) throw new Error("Gateway proof not ready yet");
-  const gwProof: string[] = gwProofResp.proof;
-  console.log("gw proof ready");
-
-  // wait for the interop root to update
-  const gwBlock = await getGwBlockForBatch(BigInt(receipt.l1BatchNumber), walletChain1.provider, gw);
-  await waitForGatewayInteropRoot(GW_CHAIN_ID, walletChain2, gwBlock);
-  console.log('interop root is updated');
-
-  // verify the message on Chain 2
-  const L2_MESSAGE_VERIFICATION_ADDRESS = "0x0000000000000000000000000000000000010009";
-  const l2MessageVerification = new Contract(
-    L2_MESSAGE_VERIFICATION_ADDRESS,
-    L2_MESSAGE_V_JSON.abi,
+  // fetch the interop root from target chain
+  const InteropRootStorage = new Contract(
+    utils.L2_INTEROP_ROOT_STORAGE_ADDRESS,
+    utils.L2_INTEROP_ROOT_STORAGE_ABI,
     walletChain2
   );
-  const srcChainId = (await walletChain1.provider.getNetwork()).chainId;
-  const included: boolean = await l2MessageVerification.proveL2MessageInclusionShared(
-    srcChainId,
-    receipt.l1BatchNumber,
-    receipt.l1BatchTxIndex,
-    { txNumberInBatch: receipt.l1BatchTxIndex, sender: walletChain1.address, data: message },
-    gwProof
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const root: string = await InteropRootStorage.interopRoots(
+      GW_CHAIN_ID,
+      gwBlock
+    );
+    if (root && root !== "0x" + "0".repeat(64)) return root;
+    // send tx just to get chain2 to seal batch
+    const t = await walletChain2.sendTransaction({
+      to: walletChain2.address,
+      value: BigInt(1),
+    });
+    await (await walletChain2.provider.getTransaction(t.hash)).waitFinalize();
+  }
+  throw new Error(
+    `Chain2 did not import interop root for (${GW_CHAIN_ID}, ${gwBlock}) in time`
   );
-  console.log("message is verified on chain 2:", included);
 }
 
 main()
