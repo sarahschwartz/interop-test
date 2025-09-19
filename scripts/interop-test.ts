@@ -43,9 +43,11 @@ async function main() {
   console.log("Sent on source chain:", sent);
 
   let status: any = "QUEUED";
+  // only for local testing
+  // testnet/mainnet will a while to excute
   while (status !== "EXECUTED") {
     await utils.sleep(10000);
-    status = await checkStatus(sent.txHash, providerChain1);
+    status = await interop.getMessageStatus(providerChain1, sent.txHash);
     console.log("Status:", status);
   }
 
@@ -60,11 +62,6 @@ async function main() {
     // includeProofInputs: true, // optional debug info
   });
   console.log("Message is verified:", verifyRes.verified);
-}
-
-async function checkStatus(txHash: `0x${string}`, provider: Provider) {
-  const status = await interop.getMessageStatus(provider, txHash);
-  return status;
 }
 
 // force interop root to update on local chain 2
