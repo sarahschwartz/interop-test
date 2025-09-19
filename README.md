@@ -49,7 +49,7 @@ zkstack chain create \
     --base-token-price-nominator 1 \
     --base-token-price-denominator 1 \
     --set-as-default false \
-    --evm-emulator false \
+    --evm-emulator true \
     --ignore-prerequisites --update-submodules false 
 ```
 
